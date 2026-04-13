@@ -1,1 +1,1 @@
-# gitHub-actions-workshop
+# github-actions-workshop
