@@ -1,4 +1,4 @@
-# GitHub Actions Workshop
+# GitHub Actions Workshop..
 
 Basit bir Python Flask Todo API uzerinde GitHub Actions pratiqi yapacagiz.
 
