@@ -2,6 +2,8 @@ name: PR Diff Summary & Auto Review # Workflow'un GitHub panelindeki adı.
 
 on: # Bu iş akışını tetikleyen olaylar.
   pull_request: # Bir Pull Request (PR) işlemi olduğunda çalışır.
+    branches:
+      - main
     types: [opened, reopened, synchronize] 
     # opened: Yeni PR açıldığında.
     # reopened: Kapatılmış bir PR tekrar açıldığında.
