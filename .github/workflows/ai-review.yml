@@ -11,8 +11,8 @@ jobs:
   ai-review: # İşin (job) kimliği.
     runs-on: ubuntu-latest # İşin en güncel Ubuntu sanal makinesinde çalışacağını belirtir.
     permissions:
-          pull-requests: write
-          contents: read  
+          pull-requests: write # Yazma isteği belirtir.
+          contents: read # İçerik okuma izni belirtir.
     steps: # İşin içindeki adımlar (sırasıyla çalışır).
       - name: Checkout repository
         uses: actions/checkout@v4 # Kodun sanal makineye indirilmesini sağlar.
