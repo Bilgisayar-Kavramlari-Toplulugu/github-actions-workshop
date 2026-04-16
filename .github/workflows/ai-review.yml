@@ -31,54 +31,58 @@ jobs:
 
       - name: Check API key
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          if [ -z "$GEMINI_API_KEY" ]; then
-            echo "::error::GEMINI_API_KEY secret bulunamadi! Repo Settings > Secrets > Actions'a ekleyin."
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::error::OPENAI_API_KEY secret bulunamadi! Repo Settings > Secrets > Actions'a ekleyin."
             exit 1
           fi
-          echo "API key mevcut (uzunluk: ${#GEMINI_API_KEY})"
+          echo "API key mevcut (uzunluk: ${#OPENAI_API_KEY})"
 
-      - name: Review with Gemini
+      - name: Review with OpenAI
         id: review
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PR_DIFF: ${{ steps.diff.outputs.diff }}
         run: |
-          # JSON body olustur - jq ile guvenli escape
           BODY=$(jq -n \
             --arg diff "$PR_DIFF" \
             '{
-              "contents": [{
-                "parts": [{
-                  "text": ("Sen deneyimli bir kod reviewer olarak asagidaki PR diffini incele ve Turkce olarak review yaz.\n\nOzellikle sunlara bak:\n- Buglar ve potansiyel hatalar\n- Guvenlik aciklari\n- Performans sorunlari\n- Iyilestirme onerileri\n\nSorun yoksa kisa bir onay mesaji yaz. Sorun varsa net ve anlasilir sekilde acikla.\n\nDiff:\n```\n" + $diff + "\n```")
-                }]
-              }],
-              "generationConfig": {
-                "temperature": 0.3,
-                "maxOutputTokens": 1024
-              }
+              "model": "gpt-4o-mini",
+              "messages": [
+                {
+                  "role": "system",
+                  "content": "Sen deneyimli bir kod reviewer olarak PR difflerini inceliyorsun. Turkce olarak review yaz. Ozellikle sunlara bak: buglar, guvenlik aciklari, performans sorunlari, iyilestirme onerileri. Sorun yoksa kisa bir onay mesaji yaz. Sorun varsa net ve anlasilir sekilde acikla."
+                },
+                {
+                  "role": "user",
+                  "content": ("Bu PR diffini review et:\n```\n" + $diff + "\n```")
+                }
+              ],
+              "temperature": 0.3,
+              "max_tokens": 1024
             }')
 
           echo "API istegi gonderiliyor..."
 
-          HTTP_CODE=$(curl -s -o /tmp/gemini_response.json -w "%{http_code}" \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}" \
+          HTTP_CODE=$(curl -s -o /tmp/openai_response.json -w "%{http_code}" \
+            "https://api.openai.com/v1/chat/completions" \
             -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${OPENAI_API_KEY}" \
             -d "$BODY")
 
           echo "HTTP status: $HTTP_CODE"
 
           if [ "$HTTP_CODE" != "200" ]; then
-            echo "::warning::Gemini API hata dondurdu (HTTP $HTTP_CODE):"
-            cat /tmp/gemini_response.json
-            REVIEW="Gemini API hata dondurdu (HTTP $HTTP_CODE). API key ve kotayi kontrol edin."
+            echo "::warning::OpenAI API hata dondurdu (HTTP $HTTP_CODE):"
+            cat /tmp/openai_response.json
+            REVIEW="OpenAI API hata dondurdu (HTTP $HTTP_CODE). API key ve kotayi kontrol edin."
           else
-            REVIEW=$(jq -r '.candidates[0].content.parts[0].text // empty' /tmp/gemini_response.json)
+            REVIEW=$(jq -r '.choices[0].message.content // empty' /tmp/openai_response.json)
             if [ -z "$REVIEW" ]; then
               echo "::warning::API yaniti beklenen formatta degil:"
-              cat /tmp/gemini_response.json
-              REVIEW="API yanitindan review metni cikarilmadi."
+              cat /tmp/openai_response.json
+              REVIEW="API yanitindan review metni cikarilamadi."
             fi
           fi
 
@@ -91,14 +95,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REVIEW_BODY: ${{ steps.review.outputs.review }}
         run: |
-          COMMENT=$(cat <<'COMMENT_EOF'
-          ## Gemini AI Review
+          gh pr comment ${{ github.event.pull_request.number }} --body "## AI PR Review (GPT-4o-mini)
 
-          COMMENT_EOF
-          )
-          COMMENT="${COMMENT}${REVIEW_BODY}
+          ${REVIEW_BODY}
 
           ---
-          *Bu review Gemini AI tarafindan otomatik olusturulmustur.*"
-
-          gh pr comment ${{ github.event.pull_request.number }} --body "$COMMENT"
+          *Bu review OpenAI GPT-4o-mini tarafindan otomatik olusturulmustur.*"
