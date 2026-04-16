@@ -21,9 +21,23 @@ jobs:
         id: diff
         run: |
           DIFF=$(git diff origin/${{ github.event.pull_request.base.ref }}...HEAD -- . ':!*.lock' | head -c 8000)
-          echo "diff<<EOF" >> $GITHUB_OUTPUT
+          if [ -z "$DIFF" ]; then
+            echo "Diff bos, fallback kullaniliyor"
+            DIFF="Degisiklik bulunamadi"
+          fi
+          echo "diff<<GHEOF" >> $GITHUB_OUTPUT
           echo "$DIFF" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "GHEOF" >> $GITHUB_OUTPUT
+
+      - name: Check API key
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "::error::GEMINI_API_KEY secret bulunamadi! Repo Settings > Secrets > Actions'a ekleyin."
+            exit 1
+          fi
+          echo "API key mevcut (uzunluk: ${#GEMINI_API_KEY})"
 
       - name: Review with Gemini
         id: review
@@ -31,26 +45,13 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           PR_DIFF: ${{ steps.diff.outputs.diff }}
         run: |
-          PROMPT=$(cat <<'PROMPT_EOF'
-          Sen deneyimli bir kod reviewer olarak asagidaki PR diffini incele ve Turkce olarak review yaz.
-
-          Ozellikle sunlara bak:
-          - Buglar ve potansiyel hatalar
-          - Guvenlik aciklari
-          - Performans sorunlari
-          - Iyilestirme onerileri
-
-          Sorun yoksa kisa bir onay mesaji yaz. Sorun varsa net ve anlasilir sekilde acikla.
-          PROMPT_EOF
-          )
-
+          # JSON body olustur - jq ile guvenli escape
           BODY=$(jq -n \
-            --arg prompt "$PROMPT" \
             --arg diff "$PR_DIFF" \
             '{
               "contents": [{
                 "parts": [{
-                  "text": ($prompt + "\n\nDiff:\n```\n" + $diff + "\n```")
+                  "text": ("Sen deneyimli bir kod reviewer olarak asagidaki PR diffini incele ve Turkce olarak review yaz.\n\nOzellikle sunlara bak:\n- Buglar ve potansiyel hatalar\n- Guvenlik aciklari\n- Performans sorunlari\n- Iyilestirme onerileri\n\nSorun yoksa kisa bir onay mesaji yaz. Sorun varsa net ve anlasilir sekilde acikla.\n\nDiff:\n```\n" + $diff + "\n```")
                 }]
               }],
               "generationConfig": {
@@ -59,26 +60,45 @@ jobs:
               }
             }')
 
-          RESPONSE=$(curl -s \
+          echo "API istegi gonderiliyor..."
+
+          HTTP_CODE=$(curl -s -o /tmp/gemini_response.json -w "%{http_code}" \
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}" \
             -H "Content-Type: application/json" \
             -d "$BODY")
 
-          REVIEW=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // "Review alinamadi."')
+          echo "HTTP status: $HTTP_CODE"
 
-          echo "review<<EOF" >> $GITHUB_OUTPUT
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::warning::Gemini API hata dondurdu (HTTP $HTTP_CODE):"
+            cat /tmp/gemini_response.json
+            REVIEW="Gemini API hata dondurdu (HTTP $HTTP_CODE). API key ve kotayi kontrol edin."
+          else
+            REVIEW=$(jq -r '.candidates[0].content.parts[0].text // empty' /tmp/gemini_response.json)
+            if [ -z "$REVIEW" ]; then
+              echo "::warning::API yaniti beklenen formatta degil:"
+              cat /tmp/gemini_response.json
+              REVIEW="API yanitindan review metni cikarilmadi."
+            fi
+          fi
+
+          echo "review<<GHEOF" >> $GITHUB_OUTPUT
           echo "$REVIEW" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "GHEOF" >> $GITHUB_OUTPUT
 
       - name: Post review comment
         env:
           GH_TOKEN: ${{ github.token }}
           REVIEW_BODY: ${{ steps.review.outputs.review }}
         run: |
-          gh pr comment ${{ github.event.pull_request.number }} \
-            --body "## Gemini AI Review
+          COMMENT=$(cat <<'COMMENT_EOF'
+          ## Gemini AI Review
 
-          ${REVIEW_BODY}
+          COMMENT_EOF
+          )
+          COMMENT="${COMMENT}${REVIEW_BODY}
 
           ---
           *Bu review Gemini AI tarafindan otomatik olusturulmustur.*"
+
+          gh pr comment ${{ github.event.pull_request.number }} --body "$COMMENT"
