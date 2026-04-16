@@ -1,0 +1,81 @@
+name: AI PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  ai-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Get PR diff
+        id: diff
+        run: |
+          DIFF=$(git diff origin/${{ github.event.pull_request.base.ref }}...HEAD -- . ':!*.lock' | head -c 8000)
+          echo "diff<<EOF" >> $GITHUB_OUTPUT
+          echo "$DIFF" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Review with Gemini
+        id: review
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          PROMPT="Sen deneyimli bir kod reviewer'sin. Asagidaki PR diff'ini incele ve Turkce olarak review yaz.
+
+          Ozellikle sunlara bak:
+          - Buglar ve potansiyel hatalar
+          - Guvenlik aciklari
+          - Performans sorunlari
+          - Iyilestirme onerileri
+
+          Sorun yoksa kisa bir onay mesaji yaz. Sorun varsa net ve anlasilir sekilde acikla."
+
+          DIFF='${{ steps.diff.outputs.diff }}'
+
+          BODY=$(jq -n \
+            --arg prompt "$PROMPT" \
+            --arg diff "$DIFF" \
+            '{
+              "contents": [{
+                "parts": [{
+                  "text": ($prompt + "\n\nDiff:\n```\n" + $diff + "\n```")
+                }]
+              }],
+              "generationConfig": {
+                "temperature": 0.3,
+                "maxOutputTokens": 1024
+              }
+            }')
+
+          RESPONSE=$(curl -s \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$BODY")
+
+          REVIEW=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // "Review alinamadi."')
+
+          echo "review<<EOF" >> $GITHUB_OUTPUT
+          echo "$REVIEW" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post review comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body "## Gemini AI Review
+
+          ${{ steps.review.outputs.review }}
+
+          ---
+          *Bu review Gemini AI tarafindan otomatik olusturulmustur.*"
