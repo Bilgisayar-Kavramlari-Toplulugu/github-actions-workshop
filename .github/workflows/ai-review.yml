@@ -29,8 +29,10 @@ jobs:
         id: review
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PR_DIFF: ${{ steps.diff.outputs.diff }}
         run: |
-          PROMPT="Sen deneyimli bir kod reviewer'sin. Asagidaki PR diff'ini incele ve Turkce olarak review yaz.
+          PROMPT=$(cat <<'PROMPT_EOF'
+          Sen deneyimli bir kod reviewer olarak asagidaki PR diffini incele ve Turkce olarak review yaz.
 
           Ozellikle sunlara bak:
           - Buglar ve potansiyel hatalar
@@ -38,13 +40,13 @@ jobs:
           - Performans sorunlari
           - Iyilestirme onerileri
 
-          Sorun yoksa kisa bir onay mesaji yaz. Sorun varsa net ve anlasilir sekilde acikla."
-
-          DIFF='${{ steps.diff.outputs.diff }}'
+          Sorun yoksa kisa bir onay mesaji yaz. Sorun varsa net ve anlasilir sekilde acikla.
+          PROMPT_EOF
+          )
 
           BODY=$(jq -n \
             --arg prompt "$PROMPT" \
-            --arg diff "$DIFF" \
+            --arg diff "$PR_DIFF" \
             '{
               "contents": [{
                 "parts": [{
@@ -58,7 +60,7 @@ jobs:
             }')
 
           RESPONSE=$(curl -s \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}" \
             -H "Content-Type: application/json" \
             -d "$BODY")
 
@@ -71,11 +73,12 @@ jobs:
       - name: Post review comment
         env:
           GH_TOKEN: ${{ github.token }}
+          REVIEW_BODY: ${{ steps.review.outputs.review }}
         run: |
           gh pr comment ${{ github.event.pull_request.number }} \
             --body "## Gemini AI Review
 
-          ${{ steps.review.outputs.review }}
+          ${REVIEW_BODY}
 
           ---
           *Bu review Gemini AI tarafindan otomatik olusturulmustur.*"
